@@ -1,0 +1,132 @@
+/* ── Google Fonts ── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap');
+
+/* ── Tailwind Base ── */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Global Styles ── */
+@layer base {
+  :root {
+    --color-brand: #4f46e5;
+    --color-accent: #f59e0b;
+    --gradient-brand: linear-gradient(135deg, #4f46e5 0%, #6366f1 50%, #818cf8 100%);
+    --gradient-dark: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+    --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.15);
+  }
+
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-surface-950 text-surface-100 font-sans antialiased;
+    min-height: 100vh;
+  }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-surface-900;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-surface-600 rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-surface-500;
+  }
+}
+
+@layer components {
+  /* ── Glass Card ── */
+  .glass-card {
+    @apply bg-surface-800/50 backdrop-blur-lg border border-surface-700/50 rounded-xl;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
+  }
+
+  .glass-card-hover {
+    @apply glass-card transition-all duration-300;
+  }
+
+  .glass-card-hover:hover {
+    @apply border-brand-500/30 -translate-y-0.5;
+    box-shadow: 0 8px 32px rgba(99, 102, 241, 0.1);
+  }
+
+  /* ── Buttons ── */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5 
+           bg-brand-600 hover:bg-brand-500 text-white font-medium rounded-lg
+           transition-all duration-200 active:scale-[0.98]
+           focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:ring-offset-2 focus:ring-offset-surface-900;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5
+           bg-surface-700 hover:bg-surface-600 text-surface-100 font-medium rounded-lg
+           border border-surface-600 hover:border-surface-500
+           transition-all duration-200 active:scale-[0.98]
+           focus:outline-none focus:ring-2 focus:ring-surface-500/50;
+  }
+
+  .btn-accent {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5
+           bg-accent-600 hover:bg-accent-500 text-white font-medium rounded-lg
+           transition-all duration-200 active:scale-[0.98]
+           focus:outline-none focus:ring-2 focus:ring-accent-500/50;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 px-5 py-2.5
+           bg-red-600 hover:bg-red-500 text-white font-medium rounded-lg
+           transition-all duration-200 active:scale-[0.98];
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2
+           text-surface-300 hover:text-surface-100 hover:bg-surface-800
+           font-medium rounded-lg transition-all duration-200;
+  }
+
+  /* ── Input Fields ── */
+  .input-field {
+    @apply w-full px-4 py-2.5 bg-surface-800 border border-surface-600 rounded-lg
+           text-surface-100 placeholder-surface-500
+           focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500
+           transition-all duration-200;
+  }
+
+  /* ── Badge ── */
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  /* ── Section heading ── */
+  .section-heading {
+    @apply text-xl font-display font-semibold text-surface-50 tracking-tight;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent;
+    background-image: var(--gradient-brand);
+  }
+
+  .glow-brand {
+    box-shadow: var(--shadow-glow);
+  }
+}

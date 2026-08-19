@@ -1,0 +1,38 @@
+# ── FastAPI ──
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+python-multipart==0.0.*
+
+# ── Database ──
+sqlalchemy[asyncio]==2.0.*
+asyncpg==0.30.*
+alembic==1.14.*
+
+# ── Pydantic ──
+pydantic==2.10.*
+pydantic-settings==2.7.*
+
+# ── PDF Processing ──
+pdfplumber==0.11.*
+PyPDF2==3.0.*
+
+# ── NLP ──
+spacy==3.8.*
+# After install, run: python -m spacy download en_core_web_sm
+# For legal NER:  pip install https://huggingface.co/opennyaiorg/en_legal_ner_sm/resolve/main/en_legal_ner_sm-any-py3-none-any.whl
+
+# ── AI / LLM ──
+langgraph==0.4.*
+google-genai==1.14.*
+
+# ── Report Generation ──
+weasyprint==63.*
+Jinja2==3.1.*
+
+# ── Utilities ──
+python-dotenv==1.1.*
+httpx==0.28.*
+
+# ── Testing ──
+pytest==8.3.*
+pytest-asyncio==0.25.*
