@@ -1,5 +1,5 @@
 /**
- * CaseOverviewPage — Shows case details, document pipeline, Phase 3A Entity Extraction, and Phase 3B Evidence Extraction.
+ * CaseOverviewPage — Shows case details, document pipeline, Phase 3A Entity Extraction, Phase 3B Evidence Extraction, and Phase 3C Contradictions.
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -11,6 +11,7 @@ import UploadDocumentModal from '../documents/UploadDocumentModal';
 import DocumentTextModal from '../documents/DocumentTextModal';
 import EntityList from '../analysis/EntityList';
 import EvidenceList from '../analysis/EvidenceList';
+import ContradictionList from '../analysis/ContradictionList';
 import { casesApi } from '../../api/cases';
 import { documentsApi } from '../../api/documents';
 import { analysisApi } from '../../api/analysis';
@@ -22,11 +23,12 @@ export default function CaseOverviewPage() {
   const [documents, setDocuments] = useState([]);
   const [entities, setEntities] = useState([]);
   const [evidenceFindings, setEvidenceFindings] = useState([]);
+  const [contradictions, setContradictions] = useState([]);
   const [analysisInfo, setAnalysisInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
-  const [activeAnalysisTab, setActiveAnalysisTab] = useState('entities'); // 'entities' | 'evidence'
+  const [activeAnalysisTab, setActiveAnalysisTab] = useState('entities'); // 'entities' | 'evidence' | 'contradictions'
 
   // Modal states
   const [isUploadOpen, setIsUploadOpen] = useState(false);
@@ -39,12 +41,13 @@ export default function CaseOverviewPage() {
 
   async function loadCaseData() {
     try {
-      const [caseRes, docsRes, analysisRes, entitiesRes, evidenceRes] = await Promise.allSettled([
+      const [caseRes, docsRes, analysisRes, entitiesRes, evidenceRes, contradictionsRes] = await Promise.allSettled([
         casesApi.getById(caseId),
         documentsApi.listByCase(caseId),
         analysisApi.getForCase(caseId),
         analysisApi.getEntities(caseId),
         analysisApi.getEvidence(caseId),
+        analysisApi.getContradictions(caseId),
       ]);
 
       if (caseRes.status === 'fulfilled') setCaseData(caseRes.value.data.data);
@@ -67,6 +70,9 @@ export default function CaseOverviewPage() {
           if (Array.isArray(arr)) flatFindings.push(...arr);
         });
         setEvidenceFindings(flatFindings);
+      }
+      if (contradictionsRes.status === 'fulfilled' && contradictionsRes.value.data?.data) {
+        setContradictions(contradictionsRes.value.data.data || []);
       }
     } catch (err) {
       console.error('Failed to load case data:', err);
@@ -264,13 +270,13 @@ export default function CaseOverviewPage() {
           )}
         </div>
 
-        {/* Phase 3: AI Legal Analysis Section (Entities + Evidence) */}
+        {/* Phase 3: AI Legal Analysis Section (Entities + Evidence + Contradictions) */}
         <div className="glass-card p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="section-heading">AI Case Analysis (Phase 3)</h3>
               <p className="text-xs text-surface-400 mt-0.5">
-                Run AI analysis to extract legal entities (Phase 3A) and factual evidence findings (Phase 3B).
+                Run AI analysis to extract legal entities (Phase 3A), evidence findings (Phase 3B), and potential contradictions (Phase 3C).
               </p>
             </div>
             <button
@@ -293,7 +299,7 @@ export default function CaseOverviewPage() {
           </div>
 
           {/* AI Disclaimer */}
-          {(entities.length > 0 || evidenceFindings.length > 0) && <AIDisclaimerBanner />}
+          {(entities.length > 0 || evidenceFindings.length > 0 || contradictions.length > 0) && <AIDisclaimerBanner />}
 
           {/* Error Alert */}
           {analysisError && (
@@ -306,7 +312,7 @@ export default function CaseOverviewPage() {
           )}
 
           {/* Analysis View Tabs */}
-          <div className="flex items-center gap-3 mb-6 border-b border-surface-700/50 pb-3">
+          <div className="flex items-center gap-3 mb-6 border-b border-surface-700/50 pb-3 flex-wrap">
             <button
               onClick={() => setActiveAnalysisTab('entities')}
               className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
@@ -329,13 +335,28 @@ export default function CaseOverviewPage() {
               <span>Evidence Findings (Phase 3B)</span>
               <span className="px-2 py-0.5 rounded-full text-[10px] bg-black/30">{evidenceFindings.length}</span>
             </button>
+            <button
+              onClick={() => setActiveAnalysisTab('contradictions')}
+              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
+                activeAnalysisTab === 'contradictions'
+                  ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/20'
+                  : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800'
+              }`}
+            >
+              <span>Contradictions (Phase 3C)</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] bg-black/30">{contradictions.length}</span>
+            </button>
           </div>
 
           {/* Active Tab Content */}
-          {activeAnalysisTab === 'entities' ? (
+          {activeAnalysisTab === 'entities' && (
             <EntityList entities={entities} documents={documents} />
-          ) : (
+          )}
+          {activeAnalysisTab === 'evidence' && (
             <EvidenceList findings={evidenceFindings} documents={documents} />
+          )}
+          {activeAnalysisTab === 'contradictions' && (
+            <ContradictionList findings={contradictions} documents={documents} />
           )}
         </div>
       </div>

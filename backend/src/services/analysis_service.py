@@ -1,10 +1,11 @@
 """
-Analysis Service — Orchestrates Phase 3A Entity Extraction and Phase 3B Evidence Extraction.
+Analysis Service — Orchestrates Phase 3A Entity Extraction, Phase 3B Evidence Extraction, and Phase 3C Contradiction Detection.
 
 Implements:
 - Phase 3A: Legal Entity Extraction via NLPService / Gemini LLM
 - Phase 3B: Factual Evidence Extraction via EvidenceAgent / Gemini LLM
-- Idempotent re-run behavior (clears previous entities and evidence findings for case)
+- Phase 3C: Contradiction Detection via ContradictionAgent / Gemini LLM
+- Idempotent re-run behavior (clears previous entities, evidence findings, and contradiction findings per case)
 - Traceability back to source documents
 - Analysis status lifecycle updates
 """
@@ -15,6 +16,7 @@ from uuid import UUID
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.agents.contradiction_agent import contradiction_agent, select_candidate_pairs
 from src.agents.evidence_agent import evidence_agent
 from src.models.analysis import Analysis, AnalysisStatus
 from src.models.case import Case, CaseStatus
@@ -29,11 +31,11 @@ logger = logging.getLogger(__name__)
 
 
 class AnalysisService:
-    """Orchestrates Phase 3A & Phase 3B analysis pipeline."""
+    """Orchestrates Phase 3A, Phase 3B, and Phase 3C analysis pipeline."""
 
     async def run_analysis(self, case_id: UUID, db: AsyncSession) -> dict:
         """
-        Execute full Phase 3A & Phase 3B analysis for a case.
+        Execute full Phase 3A, 3B, & 3C analysis for a case.
 
         Args:
             case_id: UUID of the Case.
@@ -43,9 +45,8 @@ class AnalysisService:
             dict containing:
                 - analysis: Analysis model instance
                 - entities: List of ExtractedEntity instances
-                - findings: List of AgentFinding instances (evidence)
-                - entity_groups: Dict of entities grouped by entity_type
-                - evidence_groups: Dict of evidence findings grouped by category
+                - evidence_findings: List of AgentFinding instances (EVIDENCE)
+                - contradiction_findings: List of AgentFinding instances (CONTRADICTION)
         """
         # 1. Fetch case
         case = await db.get(Case, case_id)
@@ -82,9 +83,8 @@ class AnalysisService:
             return {
                 "analysis": analysis,
                 "entities": [],
-                "findings": [],
-                "entity_groups": {},
-                "evidence_groups": {},
+                "evidence_findings": [],
+                "contradiction_findings": [],
                 "message": "No documents with extractable text found.",
             }
 
@@ -127,7 +127,9 @@ class AnalysisService:
         analysis_repo = AnalysisRepository(db)
         await analysis_repo.delete_evidence_findings_by_case(case_id)
 
-        all_created_findings = []
+        all_evidence_findings = []
+        evidence_dicts_for_candidates = []
+
         for doc in valid_docs:
             text_to_process = doc.cleaned_text or doc.extracted_text
             evidence_data = await evidence_agent.extract_evidence(
@@ -152,7 +154,57 @@ class AnalysisService:
                     },
                     raw_llm_response=item,
                 )
-                all_created_findings.append(finding_obj)
+                all_evidence_findings.append(finding_obj)
+                evidence_dicts_for_candidates.append({
+                    "id": str(finding_obj.id),
+                    "finding_text": item["statement"],
+                    "source_references": {
+                        "document_id": str(doc.id),
+                        "document_name": doc.filename,
+                        "page_number": item.get("page_number"),
+                        "excerpt": item.get("source_text"),
+                        "category": item.get("category", "FACT"),
+                        "evidence_strength": item.get("evidence_strength", "HIGH"),
+                    },
+                })
+
+        # ── Phase 3C: Contradiction Detection ──
+        await analysis_repo.delete_contradiction_findings_by_case(case_id)
+
+        entity_dicts_for_candidates = [
+            {
+                "document_id": str(e.document_id),
+                "entity_text": e.entity_text,
+                "entity_type": e.entity_type,
+            }
+            for e in all_created_entities
+        ]
+
+        candidate_pairs = select_candidate_pairs(
+            evidence_findings=evidence_dicts_for_candidates,
+            entities=entity_dicts_for_candidates,
+        )
+
+        all_contradiction_findings = []
+        if candidate_pairs:
+            detected_contradictions = await contradiction_agent.analyze_candidate_pairs(candidate_pairs)
+
+            for c_item in detected_contradictions:
+                finding_obj = await analysis_repo.add_finding(
+                    analysis_id=analysis.id,
+                    agent_type=AgentType.CONTRADICTION,
+                    finding_text=c_item["explanation"],
+                    confidence_score=c_item["confidence"],
+                    source_references={
+                        "classification": c_item["classification"],
+                        "contradiction_type": c_item["contradiction_type"],
+                        "explanation": c_item["explanation"],
+                        "source_a": c_item["source_a"],
+                        "source_b": c_item["source_b"],
+                    },
+                    raw_llm_response=c_item,
+                )
+                all_contradiction_findings.append(finding_obj)
 
         # Update final status
         analysis.status = AnalysisStatus.COMPLETED
@@ -161,31 +213,20 @@ class AnalysisService:
         await db.commit()
         await db.refresh(analysis)
 
-        # Group entities
-        entity_groups = {}
-        for ent in all_created_entities:
-            grp = entity_groups.setdefault(ent.entity_type, [])
-            grp.append(ent)
-
-        # Group evidence findings
-        evidence_groups = {}
-        for f in all_created_findings:
-            cat = (f.source_references or {}).get("category", "FACT")
-            grp = evidence_groups.setdefault(cat, [])
-            grp.append(f)
-
         logger.info(
-            f"Analysis {analysis.id} completed. Extracted {len(all_created_entities)} entities and "
-            f"{len(all_created_findings)} evidence findings across {len(valid_docs)} documents."
+            f"Analysis {analysis.id} completed. Extracted {len(all_created_entities)} entities, "
+            f"{len(all_evidence_findings)} evidence findings, and {len(all_contradiction_findings)} contradictions."
         )
 
         return {
             "analysis": analysis,
             "entities": all_created_entities,
-            "findings": all_created_findings,
-            "entity_groups": entity_groups,
-            "evidence_groups": evidence_groups,
-            "message": f"Successfully extracted {len(all_created_entities)} entities and {len(all_created_findings)} evidence findings.",
+            "evidence_findings": all_evidence_findings,
+            "contradiction_findings": all_contradiction_findings,
+            "message": (
+                f"Successfully completed analysis: {len(all_created_entities)} entities, "
+                f"{len(all_evidence_findings)} evidence findings, {len(all_contradiction_findings)} potential contradictions."
+            ),
         }
 
 

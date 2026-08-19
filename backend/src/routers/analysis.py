@@ -1,5 +1,5 @@
 """
-Analysis Router — Endpoints for triggering AI analysis, entity extraction, and evidence extraction.
+Analysis Router — Endpoints for triggering AI analysis, entity extraction, evidence extraction, and contradiction detection.
 """
 
 from uuid import UUID
@@ -31,10 +31,7 @@ router = APIRouter()
 @router.post("/cases/{case_id}/analyze", response_model=AnalysisTriggerResponse, status_code=status.HTTP_200_OK)
 async def trigger_analysis(case_id: UUID, db: AsyncSession = Depends(get_db)):
     """
-    Trigger Phase 3A (Entity Extraction) and Phase 3B (Evidence Extraction) for a case.
-
-    Validates case, retrieves document text, extracts entities and factual evidence via Gemini AI,
-    persists records idempotently, and returns structured analysis results.
+    Trigger Phase 3A (Entities), Phase 3B (Evidence), and Phase 3C (Contradictions) analysis for a case.
     """
     case = await db.get(Case, case_id)
     if not case:
@@ -50,7 +47,9 @@ async def trigger_analysis(case_id: UUID, db: AsyncSession = Depends(get_db)):
 
     analysis_obj = result["analysis"]
     entities_list = result["entities"]
-    findings_list = result["findings"]
+    evidence_list = result["evidence_findings"]
+    contradiction_list = result["contradiction_findings"]
+    all_findings = evidence_list + contradiction_list
 
     return AnalysisTriggerResponse(
         status="success",
@@ -62,7 +61,7 @@ async def trigger_analysis(case_id: UUID, db: AsyncSession = Depends(get_db)):
             started_at=analysis_obj.started_at,
             completed_at=analysis_obj.completed_at,
             error_message=analysis_obj.error_message,
-            findings_count=len(findings_list),
+            findings_count=len(all_findings),
         ),
         entities_count=len(entities_list),
         entities=[
@@ -79,6 +78,40 @@ async def trigger_analysis(case_id: UUID, db: AsyncSession = Depends(get_db)):
             for e in entities_list
         ],
     )
+
+
+@router.get("/cases/{case_id}/contradictions")
+async def get_case_contradictions(case_id: UUID, db: AsyncSession = Depends(get_db)):
+    """
+    Get all potential contradiction findings for a case.
+    """
+    case = await db.get(Case, case_id)
+    if not case:
+        raise CaseNotFoundError(str(case_id))
+
+    analysis_repo = AnalysisRepository(db)
+    latest_analysis = await analysis_repo.get_latest_for_case(case_id)
+    if not latest_analysis:
+        return {"status": "success", "case_id": str(case_id), "total_count": 0, "data": []}
+
+    findings = await analysis_repo.get_findings(latest_analysis.id, agent_type=AgentType.CONTRADICTION)
+
+    return {
+        "status": "success",
+        "case_id": str(case_id),
+        "total_count": len(findings),
+        "data": [
+            FindingResponse(
+                id=f.id,
+                agent_type=f.agent_type,
+                finding_text=f.finding_text,
+                confidence_score=f.confidence_score,
+                source_references=f.source_references,
+                created_at=f.created_at,
+            ).model_dump()
+            for f in findings
+        ],
+    }
 
 
 @router.get("/cases/{case_id}/evidence")
