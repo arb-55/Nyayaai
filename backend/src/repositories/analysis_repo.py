@@ -4,7 +4,7 @@ Analysis Repository — Database access layer for Analysis, AgentFinding, Consen
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.analysis import Analysis, AnalysisStatus
@@ -62,6 +62,19 @@ class AnalysisRepository:
         stmt = stmt.order_by(AgentFinding.confidence_score.desc())
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
+
+    async def delete_evidence_findings_by_case(self, case_id: UUID) -> int:
+        """
+        Delete previous evidence findings for a case to guarantee zero duplicates on re-runs.
+        Preserves non-evidence findings or other analysis records.
+        """
+        subq = select(Analysis.id).where(Analysis.case_id == case_id)
+        stmt = delete(AgentFinding).where(
+            AgentFinding.analysis_id.in_(subq),
+            AgentFinding.agent_type == AgentType.EVIDENCE
+        )
+        result = await self.db.execute(stmt)
+        return result.rowcount
 
     async def save_consensus_report(self, analysis_id: UUID, **kwargs) -> ConsensusReport:
         report = ConsensusReport(analysis_id=analysis_id, **kwargs)

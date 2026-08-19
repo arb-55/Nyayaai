@@ -1,22 +1,32 @@
 /**
- * CaseOverviewPage — Shows case details, document pipeline, and analysis status.
+ * CaseOverviewPage — Shows case details, document pipeline, Phase 3A Entity Extraction, and Phase 3B Evidence Extraction.
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Header from '../../shared/Header';
 import StatusBadge from '../../shared/StatusBadge';
 import LoadingSpinner from '../../shared/LoadingSpinner';
+import AIDisclaimerBanner from '../../shared/AIDisclaimerBanner';
 import UploadDocumentModal from '../documents/UploadDocumentModal';
 import DocumentTextModal from '../documents/DocumentTextModal';
+import EntityList from '../analysis/EntityList';
+import EvidenceList from '../analysis/EvidenceList';
 import { casesApi } from '../../api/cases';
 import { documentsApi } from '../../api/documents';
+import { analysisApi } from '../../api/analysis';
 
 export default function CaseOverviewPage() {
   const { caseId } = useParams();
   const navigate = useNavigate();
   const [caseData, setCaseData] = useState(null);
   const [documents, setDocuments] = useState([]);
+  const [entities, setEntities] = useState([]);
+  const [evidenceFindings, setEvidenceFindings] = useState([]);
+  const [analysisInfo, setAnalysisInfo] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState(null);
+  const [activeAnalysisTab, setActiveAnalysisTab] = useState('entities'); // 'entities' | 'evidence'
 
   // Modal states
   const [isUploadOpen, setIsUploadOpen] = useState(false);
@@ -29,16 +39,60 @@ export default function CaseOverviewPage() {
 
   async function loadCaseData() {
     try {
-      const [caseRes, docsRes] = await Promise.all([
+      const [caseRes, docsRes, analysisRes, entitiesRes, evidenceRes] = await Promise.allSettled([
         casesApi.getById(caseId),
         documentsApi.listByCase(caseId),
+        analysisApi.getForCase(caseId),
+        analysisApi.getEntities(caseId),
+        analysisApi.getEvidence(caseId),
       ]);
-      setCaseData(caseRes.data.data);
-      setDocuments(docsRes.data.data || []);
+
+      if (caseRes.status === 'fulfilled') setCaseData(caseRes.value.data.data);
+      if (docsRes.status === 'fulfilled') setDocuments(docsRes.value.data.data || []);
+      if (analysisRes.status === 'fulfilled' && analysisRes.value.data?.data) {
+        setAnalysisInfo(analysisRes.value.data.data);
+      }
+      if (entitiesRes.status === 'fulfilled' && entitiesRes.value.data?.data) {
+        const rawGroups = entitiesRes.value.data.data || [];
+        const flatEntities = [];
+        rawGroups.forEach((grp) => {
+          if (grp.entities) flatEntities.push(...grp.entities);
+        });
+        setEntities(flatEntities);
+      }
+      if (evidenceRes.status === 'fulfilled' && evidenceRes.value.data?.data) {
+        const rawGroups = evidenceRes.value.data.data || {};
+        const flatFindings = [];
+        Object.values(rawGroups).forEach((arr) => {
+          if (Array.isArray(arr)) flatFindings.push(...arr);
+        });
+        setEvidenceFindings(flatFindings);
+      }
     } catch (err) {
-      console.error('Failed to load case:', err);
+      console.error('Failed to load case data:', err);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleRunAnalysis() {
+    setAnalyzing(true);
+    setAnalysisError(null);
+    try {
+      const res = await analysisApi.trigger(caseId);
+      if (res.data?.entities) {
+        setEntities(res.data.entities);
+      }
+      if (res.data?.data) {
+        setAnalysisInfo(res.data.data);
+      }
+      await loadCaseData();
+    } catch (err) {
+      console.error('Analysis error:', err);
+      const msg = err.response?.data?.detail?.message || err.response?.data?.error?.message || 'AI Analysis failed.';
+      setAnalysisError(msg);
+    } finally {
+      setAnalyzing(false);
     }
   }
 
@@ -69,6 +123,10 @@ export default function CaseOverviewPage() {
     );
   }
 
+  const hasExtractableDocs = documents.some(
+    (d) => d.has_extracted_text || d.has_cleaned_text || d.extraction_status === 'COMPLETED'
+  );
+
   return (
     <div className="animate-fade-in">
       <Header
@@ -91,7 +149,7 @@ export default function CaseOverviewPage() {
         {/* Case Info Card */}
         <div className="glass-card p-6">
           <h3 className="section-heading mb-4">Case Information</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="p-4 bg-surface-800/40 rounded-lg">
               <p className="text-xs text-surface-500 uppercase tracking-wider mb-1">Status</p>
               <StatusBadge status={caseData.status} />
@@ -101,12 +159,12 @@ export default function CaseOverviewPage() {
               <p className="text-2xl font-display font-bold text-surface-100">{documents.length}</p>
             </div>
             <div className="p-4 bg-surface-800/40 rounded-lg">
-              <p className="text-xs text-surface-500 uppercase tracking-wider mb-1">Created Date</p>
-              <p className="text-sm text-surface-200">
-                {new Date(caseData.created_at).toLocaleDateString('en-IN', {
-                  day: 'numeric', month: 'long', year: 'numeric'
-                })}
-              </p>
+              <p className="text-xs text-surface-500 uppercase tracking-wider mb-1">Extracted Entities</p>
+              <p className="text-2xl font-display font-bold text-brand-300">{entities.length}</p>
+            </div>
+            <div className="p-4 bg-surface-800/40 rounded-lg">
+              <p className="text-xs text-surface-500 uppercase tracking-wider mb-1">Evidence Findings</p>
+              <p className="text-2xl font-display font-bold text-emerald-400">{evidenceFindings.length}</p>
             </div>
           </div>
         </div>
@@ -171,7 +229,6 @@ export default function CaseOverviewPage() {
                   </div>
 
                   <div className="flex items-center gap-3 ml-4">
-                    {/* Status Badge */}
                     <span className={`badge ${
                       doc.extraction_status === 'COMPLETED'
                         ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
@@ -182,7 +239,6 @@ export default function CaseOverviewPage() {
                       {doc.extraction_status}
                     </span>
 
-                    {/* View Text Button */}
                     <button
                       onClick={() => setSelectedDocId(doc.id)}
                       className="btn-secondary text-xs px-3 py-1.5"
@@ -190,7 +246,6 @@ export default function CaseOverviewPage() {
                       View Text
                     </button>
 
-                    {/* Delete Button */}
                     <button
                       onClick={() => handleDeleteDocument(doc.id, doc.filename)}
                       disabled={deletingDocId === doc.id}
@@ -209,14 +264,79 @@ export default function CaseOverviewPage() {
           )}
         </div>
 
-        {/* Analysis Section Placeholder */}
+        {/* Phase 3: AI Legal Analysis Section (Entities + Evidence) */}
         <div className="glass-card p-6">
-          <h3 className="section-heading mb-4">Analysis</h3>
-          <div className="text-center py-8">
-            <p className="text-sm text-surface-400">
-              AI multi-agent analysis will be available after documents are uploaded and processed.
-            </p>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="section-heading">AI Case Analysis (Phase 3)</h3>
+              <p className="text-xs text-surface-400 mt-0.5">
+                Run AI analysis to extract legal entities (Phase 3A) and factual evidence findings (Phase 3B).
+              </p>
+            </div>
+            <button
+              onClick={handleRunAnalysis}
+              disabled={analyzing || !hasExtractableDocs}
+              className="btn-accent text-xs disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {analyzing ? (
+                <span className="flex items-center gap-2">
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Running AI Analysis...
+                </span>
+              ) : (
+                'Run AI Analysis'
+              )}
+            </button>
           </div>
+
+          {/* AI Disclaimer */}
+          {(entities.length > 0 || evidenceFindings.length > 0) && <AIDisclaimerBanner />}
+
+          {/* Error Alert */}
+          {analysisError && (
+            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg flex items-start gap-2">
+              <svg className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+              </svg>
+              <p className="text-xs text-red-300">{analysisError}</p>
+            </div>
+          )}
+
+          {/* Analysis View Tabs */}
+          <div className="flex items-center gap-3 mb-6 border-b border-surface-700/50 pb-3">
+            <button
+              onClick={() => setActiveAnalysisTab('entities')}
+              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
+                activeAnalysisTab === 'entities'
+                  ? 'bg-brand-600 text-white shadow-lg shadow-brand-600/20'
+                  : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800'
+              }`}
+            >
+              <span>Legal Entities (Phase 3A)</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] bg-black/30">{entities.length}</span>
+            </button>
+            <button
+              onClick={() => setActiveAnalysisTab('evidence')}
+              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
+                activeAnalysisTab === 'evidence'
+                  ? 'bg-brand-600 text-white shadow-lg shadow-brand-600/20'
+                  : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800'
+              }`}
+            >
+              <span>Evidence Findings (Phase 3B)</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] bg-black/30">{evidenceFindings.length}</span>
+            </button>
+          </div>
+
+          {/* Active Tab Content */}
+          {activeAnalysisTab === 'entities' ? (
+            <EntityList entities={entities} documents={documents} />
+          ) : (
+            <EvidenceList findings={evidenceFindings} documents={documents} />
+          )}
         </div>
       </div>
 
