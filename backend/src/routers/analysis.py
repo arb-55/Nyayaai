@@ -1,5 +1,5 @@
 """
-Analysis Router — Endpoints for triggering AI analysis, entity extraction, evidence extraction, and contradiction detection.
+Analysis Router — Endpoints for triggering AI analysis, entity extraction, evidence extraction, contradiction detection, and legal research.
 """
 
 from uuid import UUID
@@ -31,7 +31,7 @@ router = APIRouter()
 @router.post("/cases/{case_id}/analyze", response_model=AnalysisTriggerResponse, status_code=status.HTTP_200_OK)
 async def trigger_analysis(case_id: UUID, db: AsyncSession = Depends(get_db)):
     """
-    Trigger Phase 3A (Entities), Phase 3B (Evidence), and Phase 3C (Contradictions) analysis for a case.
+    Trigger full Phase 3 AI Analysis (Entities, Evidence, Contradictions, Legal Research) for a case.
     """
     case = await db.get(Case, case_id)
     if not case:
@@ -49,7 +49,8 @@ async def trigger_analysis(case_id: UUID, db: AsyncSession = Depends(get_db)):
     entities_list = result["entities"]
     evidence_list = result["evidence_findings"]
     contradiction_list = result["contradiction_findings"]
-    all_findings = evidence_list + contradiction_list
+    legal_research_list = result["legal_research_findings"]
+    all_findings = evidence_list + contradiction_list + legal_research_list
 
     return AnalysisTriggerResponse(
         status="success",
@@ -78,6 +79,40 @@ async def trigger_analysis(case_id: UUID, db: AsyncSession = Depends(get_db)):
             for e in entities_list
         ],
     )
+
+
+@router.get("/cases/{case_id}/legal-research")
+async def get_case_legal_research(case_id: UUID, db: AsyncSession = Depends(get_db)):
+    """
+    Get all legal research findings for a case with verification status and authority details.
+    """
+    case = await db.get(Case, case_id)
+    if not case:
+        raise CaseNotFoundError(str(case_id))
+
+    analysis_repo = AnalysisRepository(db)
+    latest_analysis = await analysis_repo.get_latest_for_case(case_id)
+    if not latest_analysis:
+        return {"status": "success", "case_id": str(case_id), "total_count": 0, "data": []}
+
+    findings = await analysis_repo.get_findings(latest_analysis.id, agent_type=AgentType.LEGAL_RESEARCH)
+
+    return {
+        "status": "success",
+        "case_id": str(case_id),
+        "total_count": len(findings),
+        "data": [
+            FindingResponse(
+                id=f.id,
+                agent_type=f.agent_type,
+                finding_text=f.finding_text,
+                confidence_score=f.confidence_score,
+                source_references=f.source_references,
+                created_at=f.created_at,
+            ).model_dump()
+            for f in findings
+        ],
+    }
 
 
 @router.get("/cases/{case_id}/contradictions")

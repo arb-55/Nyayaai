@@ -1,5 +1,5 @@
 /**
- * CaseOverviewPage — Shows case details, document pipeline, Phase 3A Entity Extraction, Phase 3B Evidence Extraction, and Phase 3C Contradictions.
+ * CaseOverviewPage — Shows case details, document pipeline, Phase 3A Entity Extraction, Phase 3B Evidence Extraction, Phase 3C Contradictions, and Phase 3D Legal Research.
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -12,6 +12,7 @@ import DocumentTextModal from '../documents/DocumentTextModal';
 import EntityList from '../analysis/EntityList';
 import EvidenceList from '../analysis/EvidenceList';
 import ContradictionList from '../analysis/ContradictionList';
+import LegalResearchList from '../analysis/LegalResearchList';
 import { casesApi } from '../../api/cases';
 import { documentsApi } from '../../api/documents';
 import { analysisApi } from '../../api/analysis';
@@ -24,11 +25,12 @@ export default function CaseOverviewPage() {
   const [entities, setEntities] = useState([]);
   const [evidenceFindings, setEvidenceFindings] = useState([]);
   const [contradictions, setContradictions] = useState([]);
+  const [legalResearch, setLegalResearch] = useState([]);
   const [analysisInfo, setAnalysisInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
-  const [activeAnalysisTab, setActiveAnalysisTab] = useState('entities'); // 'entities' | 'evidence' | 'contradictions'
+  const [activeAnalysisTab, setActiveAnalysisTab] = useState('entities'); // 'entities' | 'evidence' | 'contradictions' | 'research'
 
   // Modal states
   const [isUploadOpen, setIsUploadOpen] = useState(false);
@@ -41,13 +43,14 @@ export default function CaseOverviewPage() {
 
   async function loadCaseData() {
     try {
-      const [caseRes, docsRes, analysisRes, entitiesRes, evidenceRes, contradictionsRes] = await Promise.allSettled([
+      const [caseRes, docsRes, analysisRes, entitiesRes, evidenceRes, contradictionsRes, researchRes] = await Promise.allSettled([
         casesApi.getById(caseId),
         documentsApi.listByCase(caseId),
         analysisApi.getForCase(caseId),
         analysisApi.getEntities(caseId),
         analysisApi.getEvidence(caseId),
         analysisApi.getContradictions(caseId),
+        analysisApi.getLegalResearch(caseId),
       ]);
 
       if (caseRes.status === 'fulfilled') setCaseData(caseRes.value.data.data);
@@ -73,6 +76,9 @@ export default function CaseOverviewPage() {
       }
       if (contradictionsRes.status === 'fulfilled' && contradictionsRes.value.data?.data) {
         setContradictions(contradictionsRes.value.data.data || []);
+      }
+      if (researchRes.status === 'fulfilled' && researchRes.value.data?.data) {
+        setLegalResearch(researchRes.value.data.data || []);
       }
     } catch (err) {
       console.error('Failed to load case data:', err);
@@ -155,7 +161,7 @@ export default function CaseOverviewPage() {
         {/* Case Info Card */}
         <div className="glass-card p-6">
           <h3 className="section-heading mb-4">Case Information</h3>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             <div className="p-4 bg-surface-800/40 rounded-lg">
               <p className="text-xs text-surface-500 uppercase tracking-wider mb-1">Status</p>
               <StatusBadge status={caseData.status} />
@@ -171,6 +177,10 @@ export default function CaseOverviewPage() {
             <div className="p-4 bg-surface-800/40 rounded-lg">
               <p className="text-xs text-surface-500 uppercase tracking-wider mb-1">Evidence Findings</p>
               <p className="text-2xl font-display font-bold text-emerald-400">{evidenceFindings.length}</p>
+            </div>
+            <div className="p-4 bg-surface-800/40 rounded-lg">
+              <p className="text-xs text-surface-500 uppercase tracking-wider mb-1">Legal Authorities</p>
+              <p className="text-2xl font-display font-bold text-purple-400">{legalResearch.length}</p>
             </div>
           </div>
         </div>
@@ -270,13 +280,13 @@ export default function CaseOverviewPage() {
           )}
         </div>
 
-        {/* Phase 3: AI Legal Analysis Section (Entities + Evidence + Contradictions) */}
+        {/* Phase 3: AI Legal Analysis Section */}
         <div className="glass-card p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h3 className="section-heading">AI Case Analysis (Phase 3)</h3>
               <p className="text-xs text-surface-400 mt-0.5">
-                Run AI analysis to extract legal entities (Phase 3A), evidence findings (Phase 3B), and potential contradictions (Phase 3C).
+                Run AI analysis to extract legal entities (3A), evidence findings (3B), potential contradictions (3C), and legal research (3D).
               </p>
             </div>
             <button
@@ -299,7 +309,7 @@ export default function CaseOverviewPage() {
           </div>
 
           {/* AI Disclaimer */}
-          {(entities.length > 0 || evidenceFindings.length > 0 || contradictions.length > 0) && <AIDisclaimerBanner />}
+          {(entities.length > 0 || evidenceFindings.length > 0 || contradictions.length > 0 || legalResearch.length > 0) && <AIDisclaimerBanner />}
 
           {/* Error Alert */}
           {analysisError && (
@@ -321,7 +331,7 @@ export default function CaseOverviewPage() {
                   : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800'
               }`}
             >
-              <span>Legal Entities (Phase 3A)</span>
+              <span>Legal Entities (3A)</span>
               <span className="px-2 py-0.5 rounded-full text-[10px] bg-black/30">{entities.length}</span>
             </button>
             <button
@@ -332,7 +342,7 @@ export default function CaseOverviewPage() {
                   : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800'
               }`}
             >
-              <span>Evidence Findings (Phase 3B)</span>
+              <span>Evidence Findings (3B)</span>
               <span className="px-2 py-0.5 rounded-full text-[10px] bg-black/30">{evidenceFindings.length}</span>
             </button>
             <button
@@ -343,8 +353,19 @@ export default function CaseOverviewPage() {
                   : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800'
               }`}
             >
-              <span>Contradictions (Phase 3C)</span>
+              <span>Contradictions (3C)</span>
               <span className="px-2 py-0.5 rounded-full text-[10px] bg-black/30">{contradictions.length}</span>
+            </button>
+            <button
+              onClick={() => setActiveAnalysisTab('research')}
+              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
+                activeAnalysisTab === 'research'
+                  ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/20'
+                  : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800'
+              }`}
+            >
+              <span>Legal Research (3D)</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] bg-black/30">{legalResearch.length}</span>
             </button>
           </div>
 
@@ -357,6 +378,9 @@ export default function CaseOverviewPage() {
           )}
           {activeAnalysisTab === 'contradictions' && (
             <ContradictionList findings={contradictions} documents={documents} />
+          )}
+          {activeAnalysisTab === 'research' && (
+            <LegalResearchList findings={legalResearch} />
           )}
         </div>
       </div>

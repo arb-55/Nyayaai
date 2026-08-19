@@ -89,6 +89,19 @@ class AnalysisRepository:
         result = await self.db.execute(stmt)
         return result.rowcount
 
+    async def delete_legal_research_findings_by_case(self, case_id: UUID) -> int:
+        """
+        Delete previous legal research findings for a case to guarantee zero duplicates on re-runs.
+        Preserves evidence findings (EVIDENCE), contradiction findings (CONTRADICTION), and extracted entities.
+        """
+        subq = select(Analysis.id).where(Analysis.case_id == case_id)
+        stmt = delete(AgentFinding).where(
+            AgentFinding.analysis_id.in_(subq),
+            AgentFinding.agent_type == AgentType.LEGAL_RESEARCH
+        )
+        result = await self.db.execute(stmt)
+        return result.rowcount
+
     async def save_consensus_report(self, analysis_id: UUID, **kwargs) -> ConsensusReport:
         report = ConsensusReport(analysis_id=analysis_id, **kwargs)
         self.db.add(report)

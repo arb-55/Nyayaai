@@ -1,13 +1,14 @@
 """
-Analysis Service — Orchestrates Phase 3A Entity Extraction, Phase 3B Evidence Extraction, and Phase 3C Contradiction Detection.
+Analysis Service — Orchestrates Phase 3A Entity Extraction, Phase 3B Evidence Extraction, Phase 3C Contradiction Detection, and Phase 3D Legal Research.
 
 Implements:
 - Phase 3A: Legal Entity Extraction via NLPService / Gemini LLM
 - Phase 3B: Factual Evidence Extraction via EvidenceAgent / Gemini LLM
 - Phase 3C: Contradiction Detection via ContradictionAgent / Gemini LLM
-- Idempotent re-run behavior (clears previous entities, evidence findings, and contradiction findings per case)
-- Traceability back to source documents
-- Analysis status lifecycle updates
+- Phase 3D: Legal Research Agent via LegalResearchAgent / LegalRetrievalService
+- Idempotent re-run behavior per case for all agents
+- Strict 2-level source verification (Domain Verification + Content Verification)
+- Traceability back to source documents and official legal citations
 """
 
 import logging
@@ -18,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.agents.contradiction_agent import contradiction_agent, select_candidate_pairs
 from src.agents.evidence_agent import evidence_agent
+from src.agents.legal_research_agent import legal_research_agent
 from src.models.analysis import Analysis, AnalysisStatus
 from src.models.case import Case, CaseStatus
 from src.models.document import Document
@@ -31,11 +33,11 @@ logger = logging.getLogger(__name__)
 
 
 class AnalysisService:
-    """Orchestrates Phase 3A, Phase 3B, and Phase 3C analysis pipeline."""
+    """Orchestrates Phase 3A, Phase 3B, Phase 3C, and Phase 3D analysis pipeline."""
 
     async def run_analysis(self, case_id: UUID, db: AsyncSession) -> dict:
         """
-        Execute full Phase 3A, 3B, & 3C analysis for a case.
+        Execute full Phase 3 (3A, 3B, 3C, 3D) analysis for a case.
 
         Args:
             case_id: UUID of the Case.
@@ -47,6 +49,7 @@ class AnalysisService:
                 - entities: List of ExtractedEntity instances
                 - evidence_findings: List of AgentFinding instances (EVIDENCE)
                 - contradiction_findings: List of AgentFinding instances (CONTRADICTION)
+                - legal_research_findings: List of AgentFinding instances (LEGAL_RESEARCH)
         """
         # 1. Fetch case
         case = await db.get(Case, case_id)
@@ -85,6 +88,7 @@ class AnalysisService:
                 "entities": [],
                 "evidence_findings": [],
                 "contradiction_findings": [],
+                "legal_research_findings": [],
                 "message": "No documents with extractable text found.",
             }
 
@@ -206,6 +210,48 @@ class AnalysisService:
                 )
                 all_contradiction_findings.append(finding_obj)
 
+        # ── Phase 3D: Legal Research Agent ──
+        await analysis_repo.delete_legal_research_findings_by_case(case_id)
+
+        # Construct research context
+        context_parts = []
+        if all_created_entities:
+            ent_summary = ", ".join([f"{e.entity_type}: {e.entity_text}" for e in all_created_entities[:15]])
+            context_parts.append(f"EXTRACTED ENTITIES: {ent_summary}")
+
+        if all_evidence_findings:
+            ev_summary = "; ".join([f"{f.finding_text}" for f in all_evidence_findings[:10]])
+            context_parts.append(f"FACTUAL EVIDENCE: {ev_summary}")
+
+        if all_contradiction_findings:
+            c_summary = "; ".join([f"{f.finding_text}" for f in all_contradiction_findings[:5]])
+            context_parts.append(f"CONTRADICTIONS: {c_summary}")
+
+        research_context = "\n".join(context_parts) if context_parts else "General legal document review."
+
+        research_data = await legal_research_agent.conduct_research(context_text=research_context)
+
+        all_legal_research_findings = []
+        for r_item in research_data:
+            finding_obj = await analysis_repo.add_finding(
+                analysis_id=analysis.id,
+                agent_type=AgentType.LEGAL_RESEARCH,
+                finding_text=f"{r_item['research_question']} — {r_item['legal_proposition']}",
+                confidence_score=r_item["confidence"],
+                source_references={
+                    "research_question": r_item["research_question"],
+                    "authority_type": r_item["authority_type"],
+                    "title": r_item["title"],
+                    "citation": r_item["citation"],
+                    "legal_proposition": r_item["legal_proposition"],
+                    "source_name": r_item["source_name"],
+                    "source_url": r_item["source_url"],
+                    "verification_status": r_item["verification_status"],
+                },
+                raw_llm_response=r_item,
+            )
+            all_legal_research_findings.append(finding_obj)
+
         # Update final status
         analysis.status = AnalysisStatus.COMPLETED
         analysis.completed_at = func.now()
@@ -215,7 +261,8 @@ class AnalysisService:
 
         logger.info(
             f"Analysis {analysis.id} completed. Extracted {len(all_created_entities)} entities, "
-            f"{len(all_evidence_findings)} evidence findings, and {len(all_contradiction_findings)} contradictions."
+            f"{len(all_evidence_findings)} evidence findings, {len(all_contradiction_findings)} contradictions, "
+            f"and {len(all_legal_research_findings)} legal research findings."
         )
 
         return {
@@ -223,9 +270,11 @@ class AnalysisService:
             "entities": all_created_entities,
             "evidence_findings": all_evidence_findings,
             "contradiction_findings": all_contradiction_findings,
+            "legal_research_findings": all_legal_research_findings,
             "message": (
                 f"Successfully completed analysis: {len(all_created_entities)} entities, "
-                f"{len(all_evidence_findings)} evidence findings, {len(all_contradiction_findings)} potential contradictions."
+                f"{len(all_evidence_findings)} evidence findings, {len(all_contradiction_findings)} contradictions, "
+                f"{len(all_legal_research_findings)} legal research findings."
             ),
         }
 
