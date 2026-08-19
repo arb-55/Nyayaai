@@ -1,5 +1,5 @@
 /**
- * CaseOverviewPage — Shows case details, document pipeline, Phase 3A Entity Extraction, Phase 3B Evidence Extraction, Phase 3C Contradictions, and Phase 3D Legal Research.
+ * CaseOverviewPage — Shows case details, document pipeline, Phase 3A Entities, 3B Evidence, 3C Contradictions, 3D Legal Research, and Phase 4 Consensus Engine.
  */
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
@@ -13,6 +13,7 @@ import EntityList from '../analysis/EntityList';
 import EvidenceList from '../analysis/EvidenceList';
 import ContradictionList from '../analysis/ContradictionList';
 import LegalResearchList from '../analysis/LegalResearchList';
+import ConsensusView from '../analysis/ConsensusView';
 import { casesApi } from '../../api/cases';
 import { documentsApi } from '../../api/documents';
 import { analysisApi } from '../../api/analysis';
@@ -26,11 +27,11 @@ export default function CaseOverviewPage() {
   const [evidenceFindings, setEvidenceFindings] = useState([]);
   const [contradictions, setContradictions] = useState([]);
   const [legalResearch, setLegalResearch] = useState([]);
-  const [analysisInfo, setAnalysisInfo] = useState(null);
+  const [consensusReport, setConsensusReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
-  const [activeAnalysisTab, setActiveAnalysisTab] = useState('entities'); // 'entities' | 'evidence' | 'contradictions' | 'research'
+  const [activeAnalysisTab, setActiveAnalysisTab] = useState('entities'); // 'entities' | 'evidence' | 'contradictions' | 'research' | 'consensus'
 
   // Modal states
   const [isUploadOpen, setIsUploadOpen] = useState(false);
@@ -43,7 +44,7 @@ export default function CaseOverviewPage() {
 
   async function loadCaseData() {
     try {
-      const [caseRes, docsRes, analysisRes, entitiesRes, evidenceRes, contradictionsRes, researchRes] = await Promise.allSettled([
+      const [caseRes, docsRes, analysisRes, entitiesRes, evidenceRes, contradictionsRes, researchRes, consensusRes] = await Promise.allSettled([
         casesApi.getById(caseId),
         documentsApi.listByCase(caseId),
         analysisApi.getForCase(caseId),
@@ -51,13 +52,11 @@ export default function CaseOverviewPage() {
         analysisApi.getEvidence(caseId),
         analysisApi.getContradictions(caseId),
         analysisApi.getLegalResearch(caseId),
+        analysisApi.getConsensus(caseId),
       ]);
 
       if (caseRes.status === 'fulfilled') setCaseData(caseRes.value.data.data);
       if (docsRes.status === 'fulfilled') setDocuments(docsRes.value.data.data || []);
-      if (analysisRes.status === 'fulfilled' && analysisRes.value.data?.data) {
-        setAnalysisInfo(analysisRes.value.data.data);
-      }
       if (entitiesRes.status === 'fulfilled' && entitiesRes.value.data?.data) {
         const rawGroups = entitiesRes.value.data.data || [];
         const flatEntities = [];
@@ -80,6 +79,9 @@ export default function CaseOverviewPage() {
       if (researchRes.status === 'fulfilled' && researchRes.value.data?.data) {
         setLegalResearch(researchRes.value.data.data || []);
       }
+      if (consensusRes.status === 'fulfilled' && consensusRes.value.data?.data) {
+        setConsensusReport(consensusRes.value.data.data);
+      }
     } catch (err) {
       console.error('Failed to load case data:', err);
     } finally {
@@ -94,9 +96,6 @@ export default function CaseOverviewPage() {
       const res = await analysisApi.trigger(caseId);
       if (res.data?.entities) {
         setEntities(res.data.entities);
-      }
-      if (res.data?.data) {
-        setAnalysisInfo(res.data.data);
       }
       await loadCaseData();
     } catch (err) {
@@ -280,13 +279,13 @@ export default function CaseOverviewPage() {
           )}
         </div>
 
-        {/* Phase 3: AI Legal Analysis Section */}
+        {/* Phase 3 & 4: AI Legal Analysis Section */}
         <div className="glass-card p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h3 className="section-heading">AI Case Analysis (Phase 3)</h3>
+              <h3 className="section-heading">AI Case Analysis (Phase 1–4)</h3>
               <p className="text-xs text-surface-400 mt-0.5">
-                Run AI analysis to extract legal entities (3A), evidence findings (3B), potential contradictions (3C), and legal research (3D).
+                Run AI analysis to extract entities (3A), evidence (3B), contradictions (3C), legal research (3D), and consensus report (Phase 4).
               </p>
             </div>
             <button
@@ -309,7 +308,7 @@ export default function CaseOverviewPage() {
           </div>
 
           {/* AI Disclaimer */}
-          {(entities.length > 0 || evidenceFindings.length > 0 || contradictions.length > 0 || legalResearch.length > 0) && <AIDisclaimerBanner />}
+          {(entities.length > 0 || evidenceFindings.length > 0 || contradictions.length > 0 || legalResearch.length > 0 || consensusReport) && <AIDisclaimerBanner />}
 
           {/* Error Alert */}
           {analysisError && (
@@ -367,6 +366,17 @@ export default function CaseOverviewPage() {
               <span>Legal Research (3D)</span>
               <span className="px-2 py-0.5 rounded-full text-[10px] bg-black/30">{legalResearch.length}</span>
             </button>
+            <button
+              onClick={() => setActiveAnalysisTab('consensus')}
+              className={`px-4 py-2 text-xs font-semibold rounded-lg transition-all flex items-center gap-2 ${
+                activeAnalysisTab === 'consensus'
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20'
+                  : 'text-surface-400 hover:text-surface-200 hover:bg-surface-800'
+              }`}
+            >
+              <span>Consensus Report (Phase 4)</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] bg-black/30">{consensusReport ? '1' : '0'}</span>
+            </button>
           </div>
 
           {/* Active Tab Content */}
@@ -381,6 +391,9 @@ export default function CaseOverviewPage() {
           )}
           {activeAnalysisTab === 'research' && (
             <LegalResearchList findings={legalResearch} />
+          )}
+          {activeAnalysisTab === 'consensus' && (
+            <ConsensusView consensusReport={consensusReport} documents={documents} />
           )}
         </div>
       </div>

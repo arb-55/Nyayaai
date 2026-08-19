@@ -1,5 +1,5 @@
 """
-Analysis Router — Endpoints for triggering AI analysis, entity extraction, evidence extraction, contradiction detection, and legal research.
+Analysis Router — Endpoints for triggering AI analysis, entity extraction, evidence extraction, contradiction detection, legal research, and consensus synthesis.
 """
 
 from uuid import UUID
@@ -12,7 +12,7 @@ from src.core.database import get_db
 from src.core.exceptions import AnalysisNotFoundError, CaseNotFoundError
 from src.models.analysis import Analysis
 from src.models.case import Case
-from src.models.finding import AgentFinding, AgentType
+from src.models.finding import AgentFinding, AgentType, ConsensusReport
 from src.repositories.analysis_repo import AnalysisRepository
 from src.repositories.entity_repo import EntityRepository
 from src.schemas.analysis import (
@@ -31,7 +31,7 @@ router = APIRouter()
 @router.post("/cases/{case_id}/analyze", response_model=AnalysisTriggerResponse, status_code=status.HTTP_200_OK)
 async def trigger_analysis(case_id: UUID, db: AsyncSession = Depends(get_db)):
     """
-    Trigger full Phase 3 AI Analysis (Entities, Evidence, Contradictions, Legal Research) for a case.
+    Trigger full Phase 1–4 AI Analysis (Entities, Evidence, Contradictions, Legal Research, Consensus Engine) for a case.
     """
     case = await db.get(Case, case_id)
     if not case:
@@ -79,6 +79,35 @@ async def trigger_analysis(case_id: UUID, db: AsyncSession = Depends(get_db)):
             for e in entities_list
         ],
     )
+
+
+@router.get("/cases/{case_id}/consensus")
+async def get_case_consensus(case_id: UUID, db: AsyncSession = Depends(get_db)):
+    """
+    Get the synthesized consensus report for a case.
+    """
+    case = await db.get(Case, case_id)
+    if not case:
+        raise CaseNotFoundError(str(case_id))
+
+    analysis_repo = AnalysisRepository(db)
+    consensus_obj = await analysis_repo.get_consensus_report_by_case(case_id)
+
+    if not consensus_obj:
+        return {"status": "success", "case_id": str(case_id), "data": None, "message": "No consensus report generated for this case yet."}
+
+    return {
+        "status": "success",
+        "case_id": str(case_id),
+        "data": {
+            "id": str(consensus_obj.id),
+            "analysis_id": str(consensus_obj.analysis_id),
+            "summary": consensus_obj.summary_text,
+            "overall_confidence": consensus_obj.overall_confidence,
+            "report_data": consensus_obj.report_data,
+            "generated_at": consensus_obj.generated_at,
+        },
+    }
 
 
 @router.get("/cases/{case_id}/legal-research")

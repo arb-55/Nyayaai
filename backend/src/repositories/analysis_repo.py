@@ -66,7 +66,6 @@ class AnalysisRepository:
     async def delete_evidence_findings_by_case(self, case_id: UUID) -> int:
         """
         Delete previous evidence findings for a case to guarantee zero duplicates on re-runs.
-        Preserves non-evidence findings or other analysis records.
         """
         subq = select(Analysis.id).where(Analysis.case_id == case_id)
         stmt = delete(AgentFinding).where(
@@ -79,7 +78,6 @@ class AnalysisRepository:
     async def delete_contradiction_findings_by_case(self, case_id: UUID) -> int:
         """
         Delete previous contradiction findings for a case to guarantee zero duplicates on re-runs.
-        Preserves evidence findings (EVIDENCE) and extracted entities.
         """
         subq = select(Analysis.id).where(Analysis.case_id == case_id)
         stmt = delete(AgentFinding).where(
@@ -92,7 +90,6 @@ class AnalysisRepository:
     async def delete_legal_research_findings_by_case(self, case_id: UUID) -> int:
         """
         Delete previous legal research findings for a case to guarantee zero duplicates on re-runs.
-        Preserves evidence findings (EVIDENCE), contradiction findings (CONTRADICTION), and extracted entities.
         """
         subq = select(Analysis.id).where(Analysis.case_id == case_id)
         stmt = delete(AgentFinding).where(
@@ -102,14 +99,56 @@ class AnalysisRepository:
         result = await self.db.execute(stmt)
         return result.rowcount
 
-    async def save_consensus_report(self, analysis_id: UUID, **kwargs) -> ConsensusReport:
-        report = ConsensusReport(analysis_id=analysis_id, **kwargs)
-        self.db.add(report)
-        await self.db.flush()
-        await self.db.refresh(report)
-        return report
+    async def delete_consensus_reports_by_case(self, case_id: UUID) -> int:
+        """
+        Delete previous consensus report records for a case to guarantee zero duplicates on re-runs.
+        Preserves all AgentFinding and ExtractedEntity records.
+        """
+        subq = select(Analysis.id).where(Analysis.case_id == case_id)
+        stmt = delete(ConsensusReport).where(ConsensusReport.analysis_id.in_(subq))
+        result = await self.db.execute(stmt)
+        return result.rowcount
+
+    async def save_or_update_consensus_report(
+        self, analysis_id: UUID, report_data: dict, overall_confidence: float, summary_text: str
+    ) -> ConsensusReport:
+        """Save or update ConsensusReport attached to analysis_id."""
+        stmt = select(ConsensusReport).where(ConsensusReport.analysis_id == analysis_id)
+        result = await self.db.execute(stmt)
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            existing.report_data = report_data
+            existing.overall_confidence = overall_confidence
+            existing.summary_text = summary_text
+            await self.db.flush()
+            await self.db.refresh(existing)
+            return existing
+        else:
+            report = ConsensusReport(
+                analysis_id=analysis_id,
+                report_data=report_data,
+                overall_confidence=overall_confidence,
+                summary_text=summary_text,
+            )
+            self.db.add(report)
+            await self.db.flush()
+            await self.db.refresh(report)
+            return report
 
     async def get_consensus_report(self, analysis_id: UUID) -> ConsensusReport | None:
         stmt = select(ConsensusReport).where(ConsensusReport.analysis_id == analysis_id)
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_consensus_report_by_case(self, case_id: UUID) -> ConsensusReport | None:
+        """Get the latest consensus report for a case."""
+        stmt = (
+            select(ConsensusReport)
+            .join(Analysis, ConsensusReport.analysis_id == Analysis.id)
+            .where(Analysis.case_id == case_id)
+            .order_by(ConsensusReport.generated_at.desc())
+            .limit(1)
+        )
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()

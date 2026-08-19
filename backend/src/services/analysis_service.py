@@ -1,14 +1,13 @@
 """
-Analysis Service — Orchestrates Phase 3A Entity Extraction, Phase 3B Evidence Extraction, Phase 3C Contradiction Detection, and Phase 3D Legal Research.
+Analysis Service — Orchestrates full Phase 3 (3A Entities, 3B Evidence, 3C Contradictions, 3D Legal Research) and Phase 4 Consensus Engine.
 
 Implements:
 - Phase 3A: Legal Entity Extraction via NLPService / Gemini LLM
 - Phase 3B: Factual Evidence Extraction via EvidenceAgent / Gemini LLM
 - Phase 3C: Contradiction Detection via ContradictionAgent / Gemini LLM
 - Phase 3D: Legal Research Agent via LegalResearchAgent / LegalRetrievalService
-- Idempotent re-run behavior per case for all agents
-- Strict 2-level source verification (Domain Verification + Content Verification)
-- Traceability back to source documents and official legal citations
+- Phase 4: Consensus Engine Synthesis via ConsensusAgent / Deterministic Weighting
+- Case-level re-run idempotency for all findings and ConsensusReport
 """
 
 import logging
@@ -17,6 +16,7 @@ from uuid import UUID
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.agents.consensus import consensus_agent
 from src.agents.contradiction_agent import contradiction_agent, select_candidate_pairs
 from src.agents.evidence_agent import evidence_agent
 from src.agents.legal_research_agent import legal_research_agent
@@ -33,11 +33,11 @@ logger = logging.getLogger(__name__)
 
 
 class AnalysisService:
-    """Orchestrates Phase 3A, Phase 3B, Phase 3C, and Phase 3D analysis pipeline."""
+    """Orchestrates Phase 3 & Phase 4 analysis pipeline."""
 
     async def run_analysis(self, case_id: UUID, db: AsyncSession) -> dict:
         """
-        Execute full Phase 3 (3A, 3B, 3C, 3D) analysis for a case.
+        Execute full Phase 3 (3A, 3B, 3C, 3D) and Phase 4 (Consensus Engine) analysis for a case.
 
         Args:
             case_id: UUID of the Case.
@@ -50,6 +50,7 @@ class AnalysisService:
                 - evidence_findings: List of AgentFinding instances (EVIDENCE)
                 - contradiction_findings: List of AgentFinding instances (CONTRADICTION)
                 - legal_research_findings: List of AgentFinding instances (LEGAL_RESEARCH)
+                - consensus_report: ConsensusReport model instance
         """
         # 1. Fetch case
         case = await db.get(Case, case_id)
@@ -89,6 +90,7 @@ class AnalysisService:
                 "evidence_findings": [],
                 "contradiction_findings": [],
                 "legal_research_findings": [],
+                "consensus_report": None,
                 "message": "No documents with extractable text found.",
             }
 
@@ -177,6 +179,7 @@ class AnalysisService:
 
         entity_dicts_for_candidates = [
             {
+                "id": str(e.id),
                 "document_id": str(e.document_id),
                 "entity_text": e.entity_text,
                 "entity_type": e.entity_type,
@@ -190,6 +193,7 @@ class AnalysisService:
         )
 
         all_contradiction_findings = []
+        contradiction_dicts = []
         if candidate_pairs:
             detected_contradictions = await contradiction_agent.analyze_candidate_pairs(candidate_pairs)
 
@@ -209,11 +213,16 @@ class AnalysisService:
                     raw_llm_response=c_item,
                 )
                 all_contradiction_findings.append(finding_obj)
+                contradiction_dicts.append({
+                    "id": str(finding_obj.id),
+                    "finding_text": c_item["explanation"],
+                    "confidence": c_item["confidence"],
+                    "source_references": finding_obj.source_references,
+                })
 
         # ── Phase 3D: Legal Research Agent ──
         await analysis_repo.delete_legal_research_findings_by_case(case_id)
 
-        # Construct research context
         context_parts = []
         if all_created_entities:
             ent_summary = ", ".join([f"{e.entity_type}: {e.entity_text}" for e in all_created_entities[:15]])
@@ -232,6 +241,7 @@ class AnalysisService:
         research_data = await legal_research_agent.conduct_research(context_text=research_context)
 
         all_legal_research_findings = []
+        legal_research_dicts = []
         for r_item in research_data:
             finding_obj = await analysis_repo.add_finding(
                 analysis_id=analysis.id,
@@ -251,6 +261,39 @@ class AnalysisService:
                 raw_llm_response=r_item,
             )
             all_legal_research_findings.append(finding_obj)
+            legal_research_dicts.append({
+                "id": str(finding_obj.id),
+                "finding_text": finding_obj.finding_text,
+                "source_references": finding_obj.source_references,
+            })
+
+        # ── Phase 4: Consensus Engine ──
+        analysis.status = AnalysisStatus.BUILDING_CONSENSUS
+        await db.flush()
+
+        # Delete previous consensus report for case to avoid duplicates on re-runs
+        await analysis_repo.delete_consensus_reports_by_case(case_id)
+
+        entities_for_consensus = [{"id": str(e.id), "entity_type": e.entity_type, "entity_text": e.entity_text} for e in all_created_entities]
+        evidence_for_consensus = [{"id": str(f.id), "finding_text": f.finding_text, "confidence": f.confidence_score, "source_references": f.source_references} for f in all_evidence_findings]
+
+        report_data = await consensus_agent.synthesize_consensus(
+            case_id=str(case_id),
+            entities=entities_for_consensus,
+            evidence_findings=evidence_for_consensus,
+            contradiction_findings=contradiction_dicts,
+            legal_research_findings=legal_research_dicts,
+        )
+
+        overall_conf = report_data.get("overall_confidence", 0.8)
+        summary_text = report_data.get("summary", "Consensus synthesis completed.")
+
+        consensus_report_obj = await analysis_repo.save_or_update_consensus_report(
+            analysis_id=analysis.id,
+            report_data=report_data,
+            overall_confidence=overall_conf,
+            summary_text=summary_text,
+        )
 
         # Update final status
         analysis.status = AnalysisStatus.COMPLETED
@@ -260,9 +303,7 @@ class AnalysisService:
         await db.refresh(analysis)
 
         logger.info(
-            f"Analysis {analysis.id} completed. Extracted {len(all_created_entities)} entities, "
-            f"{len(all_evidence_findings)} evidence findings, {len(all_contradiction_findings)} contradictions, "
-            f"and {len(all_legal_research_findings)} legal research findings."
+            f"Analysis {analysis.id} completed. Consensus Report {consensus_report_obj.id} synthesized with confidence {overall_conf}."
         )
 
         return {
@@ -271,9 +312,10 @@ class AnalysisService:
             "evidence_findings": all_evidence_findings,
             "contradiction_findings": all_contradiction_findings,
             "legal_research_findings": all_legal_research_findings,
+            "consensus_report": consensus_report_obj,
             "message": (
-                f"Successfully completed analysis: {len(all_created_entities)} entities, "
-                f"{len(all_evidence_findings)} evidence findings, {len(all_contradiction_findings)} contradictions, "
+                f"Successfully completed analysis and consensus synthesis: {len(all_created_entities)} entities, "
+                f"{len(all_evidence_findings)} evidence, {len(all_contradiction_findings)} contradictions, "
                 f"{len(all_legal_research_findings)} legal research findings."
             ),
         }
